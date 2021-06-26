@@ -138,25 +138,19 @@ class MyAgent(OneShotAgent):
                     except TypeError as e:
                         raise ValueError(f"{args} {kwargs}")
 
+            if hasattr(self, method_name):
+                try:
+                    getattr(super(MyAgent, self), method_name)(*args[1:], **kwargs)
+
+                except TypeError as e:
+                    raise ValueError(f"{args} {kwargs}")
+
         modified_method.__name__ = method_name
         return modified_method
 
     @classmethod
     def add_method(cls, name, func):
         return setattr(cls, name, types.MethodType(func, cls))
-
-    def create_negotiator(
-            self,
-            negotiator_type: Union[str, Type[PassThroughNegotiator]] = None,
-            name: str = None,
-            cntxt: Any = None,
-            **kwargs,
-    ) -> PassThroughNegotiator:
-        # print("!!!!!")
-        # print(negotiator_type, name, kwargs)
-        new_negotiator = self.make_negotiator(negotiator_type, name, **kwargs)
-        self.add_negotiator(new_negotiator)
-        return new_negotiator
 
     def propose(self, negotiator_id: str, state: SAOState) -> Optional[Outcome]:
         """Called when the agent is asking to propose in one negotiation"""
