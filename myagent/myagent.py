@@ -60,30 +60,25 @@ import time
 
 # required for typing
 import types
-from pprint import pprint
-from typing import Any, Dict, List, Optional, Union, Type
+from typing import Any, Optional, Union, Type
 
 import numpy as np
 from negmas.helpers import humanize_time
 from negmas.sao import SAOState
 
 # required for development
-from scml import BuyCheapSellExpensiveAgent, DecentralizingAgent, GreedyOneShotAgent, UNIT_PRICE, QUANTITY
+from scml import GreedyOneShotAgent, UNIT_PRICE, QUANTITY
 from scml.oneshot import OneShotAgent
 from scml.oneshot.agents import RandomOneShotAgent, SyncRandomOneShotAgent
 from scml.scml2020.utils import anac2021_collusion, anac2021_oneshot, anac2021_std
 from tabulate import tabulate
 
 from negmas import (
-    AgentMechanismInterface,
-    Breach,
-    Contract,
-    Issue,
-    MechanismState,
-    Negotiator,
     Outcome,
     ResponseType, PassThroughNegotiator,
 )
+
+from worker_agents import SimpleAgent, BetterAgent, AdaptiveAgent, LearningAgent
 
 
 class MyAgent(OneShotAgent):
@@ -96,16 +91,17 @@ class MyAgent(OneShotAgent):
 
     """
     DEBUG = False
-    ALL_BASE_AGENTS = [GreedyOneShotAgent, ]
+    ALL_BASE_AGENTS = [GreedyOneShotAgent, SimpleAgent, BetterAgent, AdaptiveAgent, LearningAgent]
 
     def __init__(self, *args, **kwargs):
         super(MyAgent, self).__init__(*args, **kwargs)
         self.base_agents = [agent(*args, **kwargs) for agent in self.ALL_BASE_AGENTS]
 
+        word_blacklist = ["span", "negotiator"]
         not_overridden_methods = ["add_method", "generate_method_which_call_inner_agents", "propose", "respond",
                                   "connect_to_oneshot_adapter", "connect_to_2021_adapter", "make_ufun",
-                                  "on_ufun_changed"]
-        word_blacklist = ["span", ]
+                                  "on_ufun_changed", "create_negotiator"]
+
         for attribute in dir(self):
             is_private = ("_" == attribute[:1])
             is_builtin = ("__" == attribute[:2])
@@ -121,6 +117,7 @@ class MyAgent(OneShotAgent):
                         and not is_in_blacklist:
                     if self.DEBUG:
                         print(f"Patching {attribute}")
+
                     method_with_proxy = self.generate_method_which_call_inner_agents(attribute, self.base_agents)
                     self.add_method(attribute, method_with_proxy)
 
@@ -136,16 +133,11 @@ class MyAgent(OneShotAgent):
             for agent in agents:
                 if hasattr(agent, method_name):
                     try:
-                        if method_name == "create_negotiator":
-                            del kwargs["name"]
-                            kwargs["id"]=5
-                        getattr(agent, method_name)(*args, **kwargs)
+                        getattr(agent, method_name)(*args[1:], **kwargs)
 
-                    except TypeError as error:
-                        if self.DEBUG:
-                            print(error)
+                    except TypeError as e:
+                        raise ValueError(f"{args} {kwargs}")
 
-                        getattr(agent, method_name)()
         modified_method.__name__ = method_name
         return modified_method
 
@@ -153,14 +145,27 @@ class MyAgent(OneShotAgent):
     def add_method(cls, name, func):
         return setattr(cls, name, types.MethodType(func, cls))
 
+    def create_negotiator(
+            self,
+            negotiator_type: Union[str, Type[PassThroughNegotiator]] = None,
+            name: str = None,
+            cntxt: Any = None,
+            **kwargs,
+    ) -> PassThroughNegotiator:
+        # print("!!!!!")
+        # print(negotiator_type, name, kwargs)
+        new_negotiator = self.make_negotiator(negotiator_type, name, **kwargs)
+        self.add_negotiator(new_negotiator)
+        return new_negotiator
+
     def propose(self, negotiator_id: str, state: SAOState) -> Optional[Outcome]:
         """Called when the agent is asking to propose in one negotiation"""
         proposes = [agent.propose(negotiator_id, state) for agent in self.base_agents]
 
         # TODO: Run KMEANS with Elbow
         propose = [-1] * 3
-        propose[UNIT_PRICE] = sum(map(lambda p: p[UNIT_PRICE], proposes)) / len(proposes)
-        propose[QUANTITY] = sum(map(lambda p: p[QUANTITY], proposes)) // len(proposes)
+        propose[UNIT_PRICE] = sum([propose[UNIT_PRICE] for propose in proposes]) / len(proposes)
+        propose[QUANTITY] = sum([propose[QUANTITY] for propose in proposes]) // len(proposes)
         return propose
 
     def respond(
@@ -169,7 +174,6 @@ class MyAgent(OneShotAgent):
         """Called when the agent is asked to respond to an offer"""
         responds = [agent.respond(negotiator_id, state, offer) for agent in self.base_agents]
         return collections.Counter(responds).most_common()[0][0]
-
 
 
 def run(
@@ -200,7 +204,7 @@ def run(
 
     """
     if competition == "oneshot":
-        competitors = [MyAgent, RandomOneShotAgent, SyncRandomOneShotAgent]
+        competitors = [MyAgent, RandomOneShotAgent, BetterAgent, AdaptiveAgent, LearningAgent]
     else:
         from scml.scml2020.agents import BuyCheapSellExpensiveAgent, DecentralizingAgent
 
