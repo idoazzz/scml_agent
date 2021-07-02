@@ -23,7 +23,7 @@ Competition website is: https://scml.cs.brown.edu
 
 To test this template do the following:
 
-0. Let the path to this file be /{path-to-this-file}/myagent.py
+0. Let the path to this file be /{path-to-this-file}/most_common_agent.py
 
 1. Install a venv (recommended)
 >> python3 -m venv .venv
@@ -48,7 +48,7 @@ On Windows:
 
 6. Run the script with no parameters (assuming you are )
 
->> python /{path-to-this-file}/myagent.py
+>> python /{path-to-this-file}/most_common_agent.py
 
 You should see a short tournament running and results reported.
 
@@ -56,6 +56,7 @@ You should see a short tournament running and results reported.
 
 # required for running tournaments and printing
 import collections
+import logging
 import time
 
 # required for typing
@@ -90,7 +91,7 @@ class MyAgent(OneShotAgent):
     in your agent. See the documentation for more details
 
     """
-    DEBUG = False
+    DEBUG = True
     ALL_BASE_AGENTS = [GreedyOneShotAgent, SimpleAgent, BetterAgent, AdaptiveAgent, LearningAgent]
 
     def __init__(self, *args, **kwargs):
@@ -100,7 +101,7 @@ class MyAgent(OneShotAgent):
         word_blacklist = ["span", "negotiator"]
         not_overridden_methods = ["add_method", "generate_method_which_call_inner_agents", "propose", "respond",
                                   "connect_to_oneshot_adapter", "connect_to_2021_adapter", "make_ufun",
-                                  "on_ufun_changed", "create_negotiator"]
+                                  "on_ufun_changed"]
 
         for attribute in dir(self):
             is_private = ("_" == attribute[:1])
@@ -116,17 +117,22 @@ class MyAgent(OneShotAgent):
                         and not is_private \
                         and not is_in_blacklist:
                     if self.DEBUG:
-                        print(f"Patching {attribute}")
+                        self.awi.logdebug(f"Patching {attribute}")
 
                     method_with_proxy = self.generate_method_which_call_inner_agents(attribute, self.base_agents)
                     self.add_method(attribute, method_with_proxy)
 
                 else:
                     if self.DEBUG:
-                        print(f"Skipped because illegal: {attribute}")
+                        self.awi.logdebug(f"Skipped because illegal: {attribute}")
 
             except AttributeError:
                 pass
+
+    def init(self):
+        for agent in self.base_agents:
+            agent._awi = self._awi
+            agent._negotiators = self._negotiators
 
     def generate_method_which_call_inner_agents(self, method_name, agents):
         def modified_method(*args, **kwargs):
@@ -173,8 +179,8 @@ class MyAgent(OneShotAgent):
 def run(
         competition="oneshot",
         reveal_names=True,
-        n_steps=10,
-        n_configs=2,  # =2
+        n_steps=2,  # =10
+        n_configs=1,  # =2
 ):
     """
     **Not needed for submission.** You can use this function to test your agent.
@@ -220,6 +226,8 @@ def run(
         verbose=True,
         n_steps=n_steps,
         n_configs=n_configs,
+        log_screen_level=logging.ERROR,
+        log_to_screen=True,
     )
     # just make names shorter
     results.total_scores.agent_type = results.total_scores.agent_type.str.split(

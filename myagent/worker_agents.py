@@ -1,7 +1,8 @@
 from collections import defaultdict
 
-from negmas import ResponseType
+from negmas import ResponseType, AgentMechanismInterface, MechanismState
 from scml import UNIT_PRICE, QUANTITY, TIME, OneShotAgent
+from typing import List, Dict, Any
 
 
 class SimpleAgent(OneShotAgent):
@@ -236,6 +237,146 @@ class LearningAgent(AdaptiveAgent):
                         (self._best_buying, self._step_price_slack),
                         (self._best_acc_buying, self._acc_price_slack),
                         (self._best_opp_buying[partner], self._opp_price_slack),
+                        (
+                            self._best_opp_acc_buying[partner],
+                            self._opp_acc_price_slack,
+                        ),
+                    )
+                ]
+            ))
+        return mn, mx
+
+
+class ImprovedLearningAgent(AdaptiveAgent):
+    def __init__(
+            self,
+            *args,
+            acc_price_slack=float("inf"),
+            step_price_slack=0.0,
+            opp_price_slack=0.0,
+            opp_acc_price_slack=0.2,
+            range_slack=0.03,
+            **kwargs
+    ):
+        super().__init__(*args, **kwargs)
+        self._acc_price_slack = acc_price_slack
+        self._step_price_slack = step_price_slack
+        self._opp_price_slack = opp_price_slack
+        self._opp_acc_price_slack = opp_acc_price_slack
+        self._range_slack = range_slack
+
+    def init(self):
+        """Initialize the quantities and best prices received so far"""
+        super().init()
+        self._best_acc_selling, self._best_acc_buying = 0.0, float("inf")
+        self._best_opp_selling = defaultdict(float)
+        self._best_opp_buying = defaultdict(lambda: float("inf"))
+        self._best_opp_acc_selling = defaultdict(float)
+        self._best_opp_acc_buying = defaultdict(lambda: float("inf"))
+        self.partners_last_cash = defaultdict(float)
+
+    def step(self):
+        """Initialize the quantities and best prices received for next step"""
+        super().step()
+        self._best_opp_selling = defaultdict(float)
+        self._best_opp_buying = defaultdict(lambda: float("inf"))
+
+    def on_negotiation_failure(
+            self,
+            partners: List[str],
+            annotation: Dict[str, Any],
+            mechanism: AgentMechanismInterface,
+            state: MechanismState,
+    ) -> None:
+        # TODO: Perform a discount for getting next contracts.
+        self._range_slack *= 1.1
+        self._opp_acc_price_slack *= 1.1
+
+    def on_negotiation_success(self, contract, mechanism):
+        """Record sales/supplies secured"""
+        super().on_negotiation_success(contract, mechanism)
+        self._range_slack *= 0.9
+        self._opp_acc_price_slack *= 0.9
+
+        # update my current best price to use for limiting concession in other
+        # negotiations
+        up = contract.agreement["unit_price"]
+        if self._is_selling(mechanism):
+            partner = contract.annotation["buyer"]
+            self._best_acc_selling = max(up, self._best_acc_selling)
+            self._best_opp_acc_selling[partner] = max(up, self._best_opp_acc_selling[partner])
+
+        else:
+            partner = contract.annotation["seller"]
+            self._best_acc_buying = min(up, self._best_acc_buying)
+            self._best_opp_acc_buying[partner] = min(up, self._best_opp_acc_buying[partner])
+
+    def respond(self, negotiator_id, state, offer):
+        # find the quantity I still need and end negotiation if I need nothing more
+        response = super().respond(negotiator_id, state, offer)
+        # update my current best price to use for limiting concession in other
+        # negotiations
+        ami = self.get_ami(negotiator_id)
+        up = offer[UNIT_PRICE]
+
+        # TODO: Perform a de-discount for getting better contracts.
+        # TODO: If the opponent balance is negative - decrease the slack.
+
+        if self._is_selling(ami):
+            partner = ami.annotation["buyer"]
+            self._best_opp_selling[partner] = max(up, self._best_selling)
+            #
+
+            if self.awi.profile.cost * 1.15 > up:
+                return ResponseType.REJECT_OFFER
+
+            self.adjust_slack(partner, buyer=False)
+
+        else:
+            partner = ami.annotation["seller"]
+
+            self._best_opp_buying[partner] = min(up, self._best_buying)
+            self.adjust_slack(partner, buyer=True)
+
+        return response
+
+    def adjust_slack(self, partner, buyer):
+        factor = 1.2 if buyer else 0.8
+
+        if self._awi.reports_of_agent(partner) is not None:
+            current_cash = self._awi.reports_of_agent(partner)[0].cash
+
+            if self.partners_last_cash[partner] - current_cash < -0.5 * current_cash:
+                self._opp_acc_price_slack *= factor
+                self._range_slack *= factor
+
+            if current_cash != self.partners_last_cash[partner]:
+                self.partners_last_cash[partner] = current_cash
+
+    def _price_range(self, ami):
+        """Limits the price by the best price received"""
+        mn = ami.issues[UNIT_PRICE].min_value
+        mx = ami.issues[UNIT_PRICE].max_value
+        if self._is_selling(ami):
+            partner = ami.annotation["buyer"]
+            mn = min(
+                mx * (1 - self._range_slack),
+                max([mn] + [p * (1 - slack) for p, slack in (  # ((1,2),(3,4),(5,6)) => (min, 12, 34, 56)
+                    # (self._best_selling, self._step_price_slack),  # Best price we got until now.
+                    # (self._best_acc_selling, self._acc_price_slack),  # Best price on succeeded contracts.
+                    # (self._best_opp_selling[partner], self._opp_price_slack),  # Best price of specific partner.
+                    (self._best_opp_acc_selling[partner], self._opp_acc_price_slack),
+                    # Best price on succeeded contracts of specific partner.
+                )
+                            ]
+                    ))
+        else:
+            partner = ami.annotation["seller"]
+            mx = max(mn * (1 + self._range_slack), min(
+                [mx]
+                + [
+                    p * (1 + slack)
+                    for p, slack in (
                         (
                             self._best_opp_acc_buying[partner],
                             self._opp_acc_price_slack,
