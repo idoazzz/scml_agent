@@ -106,9 +106,14 @@ class MyAgent(OneShotAgent):
         mn, mx = self._price_range(ami)
         th = self._th(state.step, ami.n_steps)
         # a good price is one better than the threshold
+        # We compromise more with time
         if self._is_selling(ami):
+            # We sell
+            # Checking the distance from min
             return (price - mn) >= th * (mx - mn)
         else:
+            # We buy
+            # Checking the distance from max
             return (mx - price) >= th * (mx - mn)
 
     def _find_good_price(self, ami, state):
@@ -116,6 +121,7 @@ class MyAgent(OneShotAgent):
         mn, mx = self._price_range(ami)
         th = self._th(state.step, ami.n_steps)
         # offer a price that is around th of your best possible price
+
         if self._is_selling(ami):
             return mn + th * (mx - mn)
         else:
@@ -146,12 +152,18 @@ class MyAgent(OneShotAgent):
         self.decrease_factor = 0.8
         self.increase_factor = 1.2
 
+        self.output_product = self.awi.my_output_product
+        self.output_product_trading_prices = []
+
     def step(self):
         """Initialize the quantities and best prices received for next step"""
         super().step()
         self._best_opp_selling = defaultdict(float)
         self._best_opp_buying = defaultdict(lambda: float("inf"))
         self.we_terminated = False
+        self.output_product_trading_prices.append(
+            (self.awi.current_step, self.awi.trading_prices[self.output_product])
+        )
 
     def on_negotiation_failure(
             self,
@@ -215,8 +227,10 @@ class MyAgent(OneShotAgent):
                 else ResponseType.REJECT_OFFER
             )
             if self._is_selling(ami):
+                # The best price that we selled the product.
                 self._best_selling = max(offer[UNIT_PRICE], self._best_selling)
             else:
+                # The best price that we bought the product.
                 self._best_buying = min(offer[UNIT_PRICE], self._best_buying)
 
         # update my current best price to use for limiting concession in other
@@ -248,7 +262,6 @@ class MyAgent(OneShotAgent):
         return response
 
     def adjust_slack(self, partner):
-
         if self._awi.reports_of_agent(partner) is not None:
             current_cash = self._awi.reports_of_agent(partner)[0].cash
 
@@ -329,6 +342,7 @@ def run(
     """
     if competition == "oneshot":
         competitors = [MyAgent, RandomOneShotAgent, BetterAgent, AdaptiveAgent, LearningAgent]
+
     else:
         from scml.scml2020.agents import BuyCheapSellExpensiveAgent, DecentralizingAgent
 
@@ -350,9 +364,8 @@ def run(
         verbose=True,
         n_steps=n_steps,
         n_configs=n_configs,
-        log_screen_level=logging.ERROR,
-        log_to_screen=True,
     )
+
     # just make names shorter
     results.total_scores.agent_type = results.total_scores.agent_type.str.split(
         "."
