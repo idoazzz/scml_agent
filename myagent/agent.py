@@ -1,26 +1,19 @@
 """
 **Submitted to ANAC 2021 SCML**
 *Authors* type-your-team-member-names-with-their-emails here
-
-
 This code is free to use or update given that proper attribution is given to
 the authors and the ANAC 2021 SCML.
-
 This module implements a factory manager for the SCM 2021 league of ANAC 2021
 competition (one-shot track). This version will not use subcomponents.
 Please refer to the
 [game description](http://www.yasserm.com/scml/scml2021oneshot.pdf) for all the
 callbacks and subcomponents available.
-
 Your agent can learn about the state of the world and itself by accessing
 properties in the AWI it has. For example:
-
 - The number of simulation steps (days): self.awi.n_steps
 - The current step (day): self.awi.current_steps
 - The factory state: self.awi.state
-
 You can access the full list of these capabilities on the documentation.
-
 """
 
 # required for running the test tournament
@@ -31,7 +24,7 @@ import time
 # required for typing
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
-
+from sklearn.linear_model import LinearRegression
 import numpy as np
 from negmas import (
     AgentMechanismInterface,
@@ -110,11 +103,23 @@ class MyAgent(OneShotAgent):
         if self._is_selling(ami):
             # We sell
             # Checking the distance from min
-            return (price - mn) >= th * (mx - mn)
+            if (self.awi.current_step > 5):
+                predicted_trading_price = self.model.predict(np.array(self.awi.current_step).reshape(-1,1))
+                good_price = min(mx, predicted_trading_price + mx/5)
+                # self.awi.logerror(f"cost: {self.awi.profile.cost} good price: {good_price}, predicted price: {predicted_trading_price}, prev: {self.awi.trading_prices[self.output_product]}")
+                return (price - mn) >= th * (mx-(mx - good_price)/mx - mn)
+            else:
+                return (price - mn) >= th * (mx - mn)
         else:
             # We buy
             # Checking the distance from max
-            return (mx - price) >= th * (mx - mn)
+            if (self.awi.current_step > 5):
+                predicted_trading_price = self.model.predict(np.array(self.awi.current_step).reshape(-1,1))
+                # self.awi.logerror(f"predicted price: {predicted_trading_price}, prev: {self.awi.trading_prices[self.output_product]}")
+                good_price = max(mn, (predicted_trading_price - self.awi.profile.cost) + mn/5)
+                return (mx - price) >= th * (mx-(mx - good_price)/mx - mn)
+            else:
+                return (mx - price) >= th * (mx - mn)
 
     def _find_good_price(self, ami, state):
         """Finds a good-enough price conceding linearly over time"""
@@ -154,6 +159,7 @@ class MyAgent(OneShotAgent):
 
         self.output_product = self.awi.my_output_product
         self.output_product_trading_prices = []
+        self.model = None
 
     def step(self):
         """Initialize the quantities and best prices received for next step"""
@@ -164,6 +170,12 @@ class MyAgent(OneShotAgent):
         self.output_product_trading_prices.append(
             (self.awi.current_step, self.awi.trading_prices[self.output_product])
         )
+        # self.awi.logerror(f"X,Y: {self.output_product_trading_prices}")
+        if (self.awi.current_step > 2):
+            x = np.array([x for (x,y) in self.output_product_trading_prices]).reshape((-1, 1))
+            y = np.array([y for (x,y) in self.output_product_trading_prices])
+            # self.awi.logerror(f"X:{x}, Y:{y}")
+            self.model = LinearRegression().fit(x, y)
 
     def on_negotiation_failure(
             self,
@@ -180,8 +192,8 @@ class MyAgent(OneShotAgent):
         self.number_of_rounds[partner] += 1
         if not self.we_terminated:
             self.partners_respond_history[partner] -= 1
-            self.awi.logerror(f"Partner balance: ${self.partners_respond_history[partner]}")
             # Partner rejected offer.
+        self.we_terminated = False
         self.adjust_slack(partner)
 
     def on_negotiation_success(self, contract, mechanism):
@@ -272,11 +284,9 @@ class MyAgent(OneShotAgent):
                 self.partners_last_cash[partner] = current_cash
 
         # If the partner is accepting more than he reject, be more strict to earn more.
-        self.awi.logerror(f"{partner} history: {self.partners_respond_history[partner]}")
         if self.partners_respond_history[partner] > 0:
             if self.partners_respond_history[partner] != 0:
                 self.decrease_factor *= 1 - (self.number_of_rounds[partner]-self.partners_respond_history[partner]) / self.number_of_rounds[partner]
-            self.awi.logerror(f"Decreasing factor: {self.decrease_factor}")
             self._opp_acc_price_slack *= self.decrease_factor
             # self.increase_factor = 1.2
 
@@ -284,11 +294,8 @@ class MyAgent(OneShotAgent):
             if self.partners_respond_history[partner] != 0:
                 #  self.partners_respond_history[partner] is negative
                 self.increase_factor *= 1 + -1 * self.partners_respond_history[partner] / self.number_of_rounds[partner]
-            self.awi.logerror(f"Increasing factor: {self.increase_factor}")
             self._opp_acc_price_slack *= self.increase_factor
             # self.decrease_factor = 0.8
-
-        self.awi.logerror(f"Slacks to {self._opp_acc_price_slack}")
 
     def _price_range(self, ami):
         """Limits the price by the best price received"""
@@ -309,7 +316,6 @@ class MyAgent(OneShotAgent):
                         ]
             )
 
-        self.awi.logerror(f"{mn} {mx}")
         return mn, mx
 
 
@@ -321,7 +327,6 @@ def run(
 ):
     """
     **Not needed for submission.** You can use this function to test your agent.
-
     Args:
         competition: The competition type to run (possibilities are oneshot, std,
                      collusion).
@@ -330,18 +335,14 @@ def run(
                      Different world configurations will correspond to
                      different number of factories, profiles
                      , production graphs etc
-
     Returns:
         None
-
     Remarks:
-
         - This function will take several minutes to run.
         - To speed it up, use a smaller `n_step` value
-
     """
     if competition == "oneshot":
-        competitors = [MyAgent, RandomOneShotAgent, BetterAgent, AdaptiveAgent, LearningAgent]
+        competitors = [MyAgent, BetterAgent, AdaptiveAgent, LearningAgent]
 
     else:
         from scml.scml2020.agents import BuyCheapSellExpensiveAgent, DecentralizingAgent
@@ -364,6 +365,8 @@ def run(
         verbose=True,
         n_steps=n_steps,
         n_configs=n_configs,
+    #   log_screen_level=logging.ERROR,
+    #   log_to_screen=True,
     )
 
     # just make names shorter
@@ -378,4 +381,4 @@ def run(
 if __name__ == "__main__":
     import sys
 
-    run(sys.argv[1] if len(sys.argv) > 1 else "oneshot")
+#    run(sys.argv[1] if len(sys.argv) > 1 else "oneshot")
